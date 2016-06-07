@@ -14,7 +14,6 @@ use YAML qw( LoadFile DumpFile );
 use JSON qw( from_json to_json );
 use Test::MockObject;
 use Log::Log4perl qw(:easy);
-use Data::Dumper;
 use File::MMagic;
 use OAuth::Cmdline::GoogleDrive;
 
@@ -27,8 +26,8 @@ sub new {
 
     my $self = {
         init_done       => undef,
-        api_file_url    => "https://www.googleapis.com/drive/v2/files",
-        api_upload_url  => "https://www.googleapis.com/upload/drive/v2/files",
+        api_file_url    => "https://www.googleapis.com/drive/v3/files",
+        api_upload_url  => "https://www.googleapis.com/upload/drive/v3/files",
         oauth           => OAuth::Cmdline::GoogleDrive->new( ),
         error           => undef,
         %options,
@@ -150,16 +149,16 @@ sub files {
         my $next_item = $self->item_iterator( $data );
 
         while( my $item = $next_item->() ) {
-          if( $item->{ kind } eq "drive#file" ) {
-            my $file = $item->{ originalFilename };
+          if( $item->{kind} && $item->{ kind } eq "drive#file" ) {
+            my $file = $item->{ name };
             if( !defined $file ) {
-                DEBUG "Skipping $item->{ title } (no originalFilename)";
+                DEBUG "Skipping $item->{ name } (no filename)";
                 next;
             }
 
             push @docs, $self->data_factory( $item );
           } else {
-            DEBUG "Skipping $item->{ title } ($item->{ kind })";
+            DEBUG "Skipping $item->{ name } ($item->{ kind })";
           }
         }
 
@@ -181,8 +180,8 @@ sub folder_create {
     my $url = URI->new( $self->{ api_file_url } );
 
     my $data = $self->http_json( $url, {
-        title    => $title,
-        parents  => [ { id => $parent } ],
+        name    => $title,
+        parents  => [ $parent ],
         mimeType => "application/vnd.google-apps.folder",
     } );
 
@@ -217,7 +216,7 @@ sub file_upload {
         my $data = $self->http_json( $url,
             { mimeType => $mime_type,
               parents  => [ { id => $parent_id } ],
-              title    => $title,
+              name    => $title,
             }
         );
 
@@ -228,15 +227,12 @@ sub file_upload {
         $file_id = $data->{ id };
     }
 
-    $url = URI->new( $self->{ api_upload_url } . "/$file_id" );
+    $url = URI->new( $self->{ api_upload_url }."/$file_id" );
     $url->query_form( uploadType => "media" );
 
-    my $req = &HTTP::Request::Common::PUT(
-        $url->as_string,
-        $self->{ oauth }->authorization_headers(),
-        "Content-Type" => $mime_type,
-        Content        => $file_data,
-    );
+     my $req = HTTP::Request->new(
+         PATCH => $url->as_string,
+         HTTP::Headers->new( $self->{oauth}->authorization_headers(), "Content-Type" => $mime_type ), \$file_data); 
 
     my $resp = $self->http_loop( $req );
 
@@ -303,8 +299,8 @@ sub children_by_folder_id {
     my $url = URI->new( $self->{ api_file_url } );
     $opts->{ q } = "'$folder_id' in parents";
 
-    if( $search_opts->{ title } ) {
-        $opts->{ q } .= " AND title = '$search_opts->{ title }'";
+    if( $search_opts->{ name } ) {
+        $opts->{ q } .= " AND name = '$search_opts->{ name }'";
     }
 
     my @children = ();
@@ -362,7 +358,7 @@ sub children {
         my $children = $self->children_by_folder_id( $folder_id,
           { maxResults    => 100, # path resolution maxResults is different
           },
-          { %$search_opts, title => $part },
+          { %$search_opts, name => $part },
         );
 
         if( ! defined $children ) {
@@ -370,8 +366,8 @@ sub children {
         }
 
         for my $child ( @$children ) {
-            DEBUG "Found child ", $child->title();
-            if( $child->title() eq $part ) {
+            DEBUG "Found child ", $child->name();
+            if( $child->name() eq $part ) {
                 $folder_id = $child->id();
                 $parent = $folder_id;
                 DEBUG "Parent: $parent";
@@ -453,7 +449,7 @@ sub data_factory {
     my $mock = Test::MockObject->new();
 
     for my $key ( keys %$data ) {
-        # DEBUG "Adding method $key";
+        #DEBUG "Adding method $key";
         $mock->mock( $key , sub { $data->{ $key } } );
     }
 
@@ -463,22 +459,24 @@ sub data_factory {
 ###########################################
 sub download {
 ###########################################
-    my( $self, $url, $local_file ) = @_;
+    my( $self, $id, $local_file ) = @_;
 
-    if( ref $url ) {
-        $url = $url->downloadUrl();
+    if( ref $id ) {
+        $id = $id->id();
     }
 
     my $req = HTTP::Request->new(
-        GET => $url,
+        GET => $self->{api_file_url}."/$id?alt=media",
     );
     $req->header( $self->{ oauth }->authorization_headers() );
 
     my $ua = LWP::UserAgent->new();
     my $resp = $ua->request( $req, $local_file );
 
+    DEBUG "Response status: ".$resp->status_line();
+
     if( $resp->is_error() ) {
-        my $msg = "Can't download $url (" . $resp->message() . ")";
+        my $msg = "Can't download $id (" . $resp->message() . ")";
         ERROR $msg;
         $self->error( $msg );
         return undef;
@@ -593,12 +591,12 @@ sub item_iterator {
 
     return sub {
         {
-            my $next_item = $data->{ items }->[ $idx++ ];
+            my $next_item = $data->{ files }->[ $idx++ ];
 
             return if !defined $next_item;
 
             if( $next_item->{ labels }->{ trashed } ) {
-                DEBUG "Skipping $next_item->{ title } (trashed)";
+                DEBUG "Skipping $next_item->{ name } (trashed)";
                 redo;
             }
 
@@ -719,7 +717,7 @@ Each child comes back as a files#resource type and gets mapped into
 an object that offers access to the various fields via methods:
 
     for my $child ( @$children ) {
-        print $child->kind(), " ", $child->title(), "\n";
+        print $child->name(), " ", $child->name(), "\n";
     }
 
 Please refer to
