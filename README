@@ -1,7 +1,3 @@
-######################################################################
-    Net::Google::Drive::Simple 0.12
-######################################################################
-
 NAME
     Net::Google::Drive::Simple - Simple modification of Google Drive data
 
@@ -18,12 +14,7 @@ SYNOPSIS
 
             next if $child->kind() ne 'drive#file';
 
-            next if !$child->can( "downloadUrl" );
-
-            print $child->originalFilename(),
-                  " can be downloaded at ",
-                  $child->downloadUrl(),
-                  "\n";
+            print $child->name()." ".$child->id()."\n";
         }
 
 DESCRIPTION
@@ -103,7 +94,7 @@ METHODS
         an object that offers access to the various fields via methods:
 
             for my $child ( @$children ) {
-                print $child->kind(), " ", $child->title(), "\n";
+                print $child->name(), " ", $child->name(), "\n";
             }
 
         Please refer to
@@ -140,57 +131,23 @@ METHODS
             $gd->file_upload( $file, $dir_id, $file_id );
 
     "$gd->download( $item, [$local_filename] )"
-        Downloads an item found via "files()" or "children()". Also accepts
-        the downloadUrl of an item. If $local_filename is not specified,
-        "download()" will return the data downloaded (this might be
-        undesirable for large files). If $local_filename is specified,
-        "download()" will store the downloaded data under the given file
-        name.
+        Downloads an item found via "files()" or "children()". If
+        $local_filename is not specified, "download()" will return the data
+        downloaded (this might be undesirable for large files). If
+        $local_filename is specified, "download()" will store the downloaded
+        data under the given file name.
 
             my $gd = Net::Google::Drive::Simple->new();
             my $files = $gd->files( { maxResults => 20 }, { page => 0 } );
             for my $file ( @$files ) {
-                my $name = $file->originalFilename();
+                my $name = $file->name();
                 print "Downloading $name\n";
                 $gd->download( $file, $name ) or die "failed: $!";
             }
 
-        Be aware that only documents like PDF or png can be downloaded
-        directly. Google Drive Documents like spreadsheets or (text)
-        documents need to be exported into one of the available formats.
-        Check for "exportLinks" on a file given. In case of a document that
-        can be exported you will receive a hash in the form:
-
-            {
-                'format_1' => 'download_link_1',
-                'format_2' => 'download_link_2',
-                ...
-            }
-
-        Choose your download link and use it as an argument to the
-        download() function which can also take urls directly.
-
-            my $gd = Net::Google::Drive::Simple->new();
-            my $children = $gd->children( '/path/to/folder/on/google/drive' );
-            for my $child ( @$children ) {
-                if ($child->can( 'exportLinks' )){
-                    my $type_chosen;
-                    foreach my $type (keys %{$child->exportLinks()}){
-                        # Take any type you can get..
-                        $type_chosen = $type;
-                        # ..but choose your preferred format, opendocument here:
-                        last if $type =~/oasis\.opendocument/;
-                    }
-                    my $url = $child->exportLinks()->{$type_chosen};
-
-                    $gd->download($url, 'my/local/file');
-
-                }
-            }
-
     "my $files = $gd->search( )"
             my $children= $gd->search({ maxResults => 20 },{ page => 0 },
-                                      "title contains 'Futurama'");
+                                      "name contains 'Futurama'");
 
         Search files for attributes. See
         <https://developers.google.com/drive/web/search-parameters> for a
